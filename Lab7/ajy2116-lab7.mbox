@@ -1,0 +1,2458 @@
+From d5c729e7b9f82a0e4d3c2fefa08c4c996eeccae8 Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Sun, 14 Apr 2019 20:51:39 -0400
+Subject: [PATCH 01/14] Starting http-server.c, server starts and forks into a
+ child, obtains header and destination directory, working on opening file from
+ destination
+
+---
+ part2/http-server.c | 111 ++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 111 insertions(+)
+ create mode 100644 part2/http-server.c
+
+diff --git a/part2/http-server.c b/part2/http-server.c
+new file mode 100644
+index 0000000..5d52f1c
+--- /dev/null
++++ b/part2/http-server.c
+@@ -0,0 +1,111 @@
++/*
++ * tcp-recver.c
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <assert.h>
++#include <unistd.h>
++#include <sys/wait.h>
++#include <sys/stat.h>
++#include <arpa/inet.h>
++#include <sys/types.h>
++#include <sys/socket.h>
++
++static void die(const char *s) { perror(s); exit(1); }
++
++int main(int argc, char **argv)
++{
++    if (argc != 3) {
++        fprintf(stderr, "usage: %s <server-port> <web_root> <mdb-lookup-host> <mdb-lookup-port>\n", argv[0]);
++        exit(1);
++    }
++
++    unsigned short port = atoi(argv[1]);
++    char *web_root = argv[2];
++
++    // Create a listening socket (also called server socket) 
++
++    int servsock;
++    if ((servsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
++        die("socket failed");
++
++    // Construct local address structure
++
++    struct sockaddr_in servaddr;
++    memset(&servaddr, 0, sizeof(servaddr));
++    servaddr.sin_family = AF_INET;
++    servaddr.sin_addr.s_addr = htonl(INADDR_ANY); // any network interface
++    servaddr.sin_port = htons(port);
++
++    // Bind to the local address
++
++    if (bind(servsock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)
++        die("bind failed");
++
++    // Start listening for incoming connections
++
++    if (listen(servsock, 5 /* queue size for connection requests */ ) < 0)
++        die("listen failed");
++
++    int clntsock;
++    socklen_t clntlen;
++    struct sockaddr_in clntaddr;
++
++ /*   FILE *fp;
++    unsigned int filesuffix = 0;
++    char filename[strlen(filebase) + 100];
++
++    int r;
++    char buf[4096];
++    uint32_t size, size_net, remaining, limit;
++    struct stat st;*/
++
++    pid_t pid; // fork value ****
++
++    while (1) {
++
++        // Accept an incoming connection
++
++        clntlen = sizeof(clntaddr); // initialize the in-out parameter
++
++        if ((clntsock = accept(servsock,
++                        (struct sockaddr *) &clntaddr, &clntlen)) < 0)
++            die("accept failed");
++
++	pid = fork(); // fork here
++
++	if(pid == 0) { // were in the child, do the code here ***
++	    char clntHead[1000];
++	    char *header;
++	   // char *root = web_root;
++	    FILE *clntInput;
++	    clntInput = fdopen(clntsock, "r");
++	    while( fgets(clntHead, sizeof(clntHead) - 1, clntInput) != NULL) {
++		if(strncmp(clntHead, "GET", 3) == 0) {
++		    printf("%s", clntHead);
++		    header = strchr(clntHead, '/');
++		    break;
++		    // snprintf(header, sizeof(header), clntHead); 
++		   // exit(1);
++		} else {
++		    break;
++		}
++	    }
++	    printf( "HERE!!!!" );
++	    
++	    for(int i=0; i < strlen(header); i++) {
++		if(header[i] == ' ') {
++		    header[i] = '\0';
++		}
++	    }
++    	    printf( "header = [%s]\n", header );
++	    header = strcat(web_root, header);
++	    printf("destination = [%s]\n", header);
++
++	}
++
++    }  
++    
++}
+-- 
+2.17.1
+
+
+From b11dc63731426cb9fc04c9af5c1b8336fb36626d Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Mon, 15 Apr 2019 01:41:48 -0400
+Subject: [PATCH 02/14] Trying to fix the code logic, working on successfully
+ displaying page and checking requests
+
+---
+ part2/http-server.c | 109 +++++++++++++++++++++++++++++++-------------
+ 1 file changed, 77 insertions(+), 32 deletions(-)
+
+diff --git a/part2/http-server.c b/part2/http-server.c
+index 5d52f1c..7134d09 100644
+--- a/part2/http-server.c
++++ b/part2/http-server.c
+@@ -13,7 +13,14 @@
+ #include <sys/types.h>
+ #include <sys/socket.h>
+ 
+-static void die(const char *s) { perror(s); exit(1); }
++static void die(const char *s) { 
++    perror(s); 
++    exit(1); 
++}
++
++/*static void statuscode(char *status) {
++    snprintf(status, sizeof(status),  
++}*/
+ 
+ int main(int argc, char **argv)
+ {
+@@ -64,48 +71,86 @@ int main(int argc, char **argv)
+ 
+     pid_t pid; // fork value ****
+ 
+-    while (1) {
+-
+-        // Accept an incoming connection
++    char status[1000];
++    char buf[4096];
++    char bodystart[] = "<html><body><h1>";
++    char bodyend[] = "</h1></body></html>";
+ 
++    while (1) {
+         clntlen = sizeof(clntaddr); // initialize the in-out parameter
+-
+-        if ((clntsock = accept(servsock,
+-                        (struct sockaddr *) &clntaddr, &clntlen)) < 0)
++        if ((clntsock = accept(servsock, (struct sockaddr *) &clntaddr, &clntlen)) < 0) {
+             die("accept failed");
+-
++	}
+ 	pid = fork(); // fork here
+-
+ 	if(pid == 0) { // were in the child, do the code here ***
+-	    char clntHead[1000];
+-	    char *header;
+-	   // char *root = web_root;
++	    char firstline[1000];
++	    char *dir;	    
+ 	    FILE *clntInput;
++	    FILE *fp;
++
+ 	    clntInput = fdopen(clntsock, "r");
+-	    while( fgets(clntHead, sizeof(clntHead) - 1, clntInput) != NULL) {
+-		if(strncmp(clntHead, "GET", 3) == 0) {
+-		    printf("%s", clntHead);
+-		    header = strchr(clntHead, '/');
+-		    break;
+-		    // snprintf(header, sizeof(header), clntHead); 
+-		   // exit(1);
+-		} else {
+-		    break;
+-		}
++
++	    //PART ONE;
++	    fgets(firstline, sizeof(firstline) - 1, clntInput);
++	   
++	    //Contains /../ or /..
++	    if((strstr(firstline, "/../") != NULL ) || (strstr(firstline, "/..") != NULL)) {
++	        snprintf(status, sizeof(status), "HTTP/1.0 403 Forbidden\r\n%s 403 Forbidden %s", bodystart, bodyend);
++	        if(send(clntsock, status, strlen(status), 0) < 0) {
++		    perror("send failed");
++	        }
++		close(clntsock);
+ 	    }
+-	    printf( "HERE!!!!" );
++
++	    //Begins with GET
++	    if(strncmp(firstline, "GET", 3) == 0 ) {
++	        dir = strchr(firstline, '/');
++	        for(int i = 0; i < strlen(dir); i++) {
++		    if(dir[i] == ' ') {
++		        dir[i] = '\0';
++	   	    }
++	        }
++	    } else {
++	      	snprintf(status, sizeof(status), "HTTP/1.0 501 Not Implemented\r\n%s 501 Not Implemented %s", bodystart, bodyend);
++		if(send(clntsock, status, strlen(status), 0) < 0) {
++		    perror("send failed");
++		}
++		close(clntsock);
++    	    }
+ 	    
+-	    for(int i=0; i < strlen(header); i++) {
+-		if(header[i] == ' ') {
+-		    header[i] = '\0';
++	    dir = strcat(web_root, dir);
++	    printf( "file [%s]\n", dir);
++	    
++
++
++
++
++	    if((fp = fopen(dir, "rb")) == NULL) {
++		snprintf(status, sizeof(status), "HTTP/1.0 404 Not Found\r\n\r\n%s 404 Not Found %s", bodystart, bodyend);
++		if(send(clntsock, status, strlen(status), 0) < 0) {
++		    perror("send failed");
++		} else {
++		    printf("send succeed %d\n", (int)strlen(status) );
++		}
++		printf("response = [%s]", status);
++	    } else {
++		fread(buf, 1, sizeof(buf), fp);
++		snprintf(status, sizeof(status), "HTTP/1.0 200 OK\r\n\r\n");
++	        send(clntsock, status, strlen(status), 0);	
++		if(send(clntsock, &buf, strlen(buf), 0) != strlen(buf)) {
++		    die("send failed");
+ 		}
+ 	    }
+-    	    printf( "header = [%s]\n", header );
+-	    header = strcat(web_root, header);
+-	    printf("destination = [%s]\n", header);
++	}    
+ 
+-	}
+ 
+-    }  
+-    
++
++
++    	    /*printf( "header = [%s]\n", header );
++	    header = strcat(web_root, header);
++	    printf("destination = [%s]\n", header);	    
++	    FILE *fp;
++	    if(fp = fopen(header, "rb") == NULL) {	   
++	    }*/	      	   
++    }   
+ }
+-- 
+2.17.1
+
+
+From 6cc593a20254303d79e6d0715aa6ccea5221dbbc Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Mon, 15 Apr 2019 19:11:07 -0400
+Subject: [PATCH 03/14] Changed structure of code, working on constructing
+ header response and sending files, closing sockets
+
+---
+ part2/http-server.c | 100 +++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 75 insertions(+), 25 deletions(-)
+
+diff --git a/part2/http-server.c b/part2/http-server.c
+index 7134d09..1cde9bb 100644
+--- a/part2/http-server.c
++++ b/part2/http-server.c
+@@ -88,63 +88,113 @@ int main(int argc, char **argv)
+ 	    FILE *clntInput;
+ 	    FILE *fp;
+ 
++	    int error_code = 200;
++	    char error_msg[128];
++	    sprintf( error_msg, "OK" );
+ 	    clntInput = fdopen(clntsock, "r");
+ 
+-	    //PART ONE;
++	    // Parse Header Request
+ 	    fgets(firstline, sizeof(firstline) - 1, clntInput);
+ 	   
+-	    //Contains /../ or /..
+-	    if((strstr(firstline, "/../") != NULL ) || (strstr(firstline, "/..") != NULL)) {
+-	        snprintf(status, sizeof(status), "HTTP/1.0 403 Forbidden\r\n%s 403 Forbidden %s", bodystart, bodyend);
+-	        if(send(clntsock, status, strlen(status), 0) < 0) {
+-		    perror("send failed");
+-	        }
+-		close(clntsock);
++/*	    //Contains /../
++	    if((strstr(firstline, "/../") != NULL )){
++		//strstr(firstline, "/..") != NULL)) {	        
++		printf("here");
++		error_code = 403;
++		sprintf(error_msg, "403 ERROR");
+ 	    }
+ 
++	    //Contains /..
++	    if(strlen(dir) >= 3 && (strncmp(dir + strelen(dir) -3, "/", 3) == 0)) {
++		error_code = 403;
++		sprintf(error_msg, "403 ERROR");
++	    }*/
++
+ 	    //Begins with GET
+ 	    if(strncmp(firstline, "GET", 3) == 0 ) {
+ 	        dir = strchr(firstline, '/');
+ 	        for(int i = 0; i < strlen(dir); i++) {
+-		    if(dir[i] == ' ') {
++		    if((dir[i] == ' ') || dir[i] == '\r') {
+ 		        dir[i] = '\0';
+ 	   	    }
+ 	        }
+ 	    } else {
+-	      	snprintf(status, sizeof(status), "HTTP/1.0 501 Not Implemented\r\n%s 501 Not Implemented %s", bodystart, bodyend);
+-		if(send(clntsock, status, strlen(status), 0) < 0) {
+-		    perror("send failed");
+-		}
+-		close(clntsock);
++		error_code = 501;
++		sprintf(error_msg, "501 Not Implemented");
+     	    }
+-	    
++
++	    //Contains /../
++	    if((strstr(dir, "/..") != NULL)) {
++	       	error_code = 403;
++		sprintf(error_msg, "403");
++	    }
++
++	    //Contains /..
++	    if(strlen(dir) >= 3 && strncmp( dir+strlen(dir)-3, "/..", 3 ) == 0) {
++		error_code = 403;
++		sprintf(error_msg, "403");
++	    }
++
++	    //Index.html
++	    if(((dir[strlen(dir)-1]) == '/') && (strcmp(dir, "/cs3157/tng/") == 0))  {
++	       	error_code = 200;
++		sprintf(dir, "%s%s", dir, "index.html");
++		sprintf(error_msg, "200 OK");
++	    }
++
++	    //Dir beginds with /
++	    if(dir[0] != '/') {
++		error_code = 400;
++		sprintf(error_msg, "400 Bad Request");
++
+ 	    dir = strcat(web_root, dir);
+-	    printf( "file [%s]\n", dir);
++	    printf("file dir [%s]\n", dir);
++	    
++	    //Construct Response Header
++	    char response_header[4096];
+ 	    
++	    
++	    if(error_code == 200 ) {
++		sprintf(response_header, " ");
++
++	    }
+ 
+ 
+ 
+ 
+ 	    if((fp = fopen(dir, "rb")) == NULL) {
++		error_code = 404;
++
+ 		snprintf(status, sizeof(status), "HTTP/1.0 404 Not Found\r\n\r\n%s 404 Not Found %s", bodystart, bodyend);
+ 		if(send(clntsock, status, strlen(status), 0) < 0) {
+ 		    perror("send failed");
+ 		} else {
+ 		    printf("send succeed %d\n", (int)strlen(status) );
+ 		}
+-		printf("response = [%s]", status);
+-	    } else {
+-		fread(buf, 1, sizeof(buf), fp);
+-		snprintf(status, sizeof(status), "HTTP/1.0 200 OK\r\n\r\n");
+-	        send(clntsock, status, strlen(status), 0);	
+-		if(send(clntsock, &buf, strlen(buf), 0) != strlen(buf)) {
+-		    die("send failed");
+-		}
+ 	    }
+-	}    
++		
++	    printf("response = %s", status);
++	    fread(buf, 1, sizeof(buf), fp);
++	    snprintf(status, sizeof(status), "HTTP/1.0 200 OK\r\n\r\n");
++	    send(clntsock, status, strlen(status), 0);	
++	    send(clntsock, &buf, strlen(buf), 0); // != strlen(buf)) {
++	//	die("send failed");
++        //	    }
++	}
+ 
++	//Construct response header
+ 
+ 
++	// Send Header
++	    
++	    if( error_code == 200 ) {
++		// send body
++	    }
++	    
++	}
++
++	
++	//Close socket and exit
+ 
+     	    /*printf( "header = [%s]\n", header );
+ 	    header = strcat(web_root, header);
+-- 
+2.17.1
+
+
+From f611f0fdb784b46b287cf164d713fcf233da7528 Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Mon, 15 Apr 2019 21:08:26 -0400
+Subject: [PATCH 04/14] Need to fix displaying the page properly, log the
+ requests, fix error code checking, make socketclose robust
+
+---
+ part2/http-server.c | 113 +++++++++++++++++++-------------------------
+ 1 file changed, 49 insertions(+), 64 deletions(-)
+
+diff --git a/part2/http-server.c b/part2/http-server.c
+index 1cde9bb..a6644d2 100644
+--- a/part2/http-server.c
++++ b/part2/http-server.c
+@@ -33,13 +33,11 @@ int main(int argc, char **argv)
+     char *web_root = argv[2];
+ 
+     // Create a listening socket (also called server socket) 
+-
+     int servsock;
+     if ((servsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+         die("socket failed");
+ 
+     // Construct local address structure
+-
+     struct sockaddr_in servaddr;
+     memset(&servaddr, 0, sizeof(servaddr));
+     servaddr.sin_family = AF_INET;
+@@ -47,46 +45,38 @@ int main(int argc, char **argv)
+     servaddr.sin_port = htons(port);
+ 
+     // Bind to the local address
+-
+     if (bind(servsock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)
+         die("bind failed");
+ 
+     // Start listening for incoming connections
+-
+     if (listen(servsock, 5 /* queue size for connection requests */ ) < 0)
+         die("listen failed");
+ 
+     int clntsock;
+     socklen_t clntlen;
+     struct sockaddr_in clntaddr;
+-
+- /*   FILE *fp;
+-    unsigned int filesuffix = 0;
+-    char filename[strlen(filebase) + 100];
+-
+-    int r;
+-    char buf[4096];
+-    uint32_t size, size_net, remaining, limit;
+-    struct stat st;*/
+-
+     pid_t pid; // fork value ****
+-
+-    char status[1000];
+-    char buf[4096];
+     char bodystart[] = "<html><body><h1>";
+     char bodyend[] = "</h1></body></html>";
++   // char buf[4096];
+ 
+     while (1) {
+         clntlen = sizeof(clntaddr); // initialize the in-out parameter
+         if ((clntsock = accept(servsock, (struct sockaddr *) &clntaddr, &clntlen)) < 0) {
+             die("accept failed");
+ 	}
++
++	//CLIENT IP ADDRESS
++
++	//FORK CHILD PROCESS LOOP
+ 	pid = fork(); // fork here
++	
+ 	if(pid == 0) { // were in the child, do the code here ***
+ 	    char firstline[1000];
+ 	    char *dir;	    
+ 	    FILE *clntInput;
+ 	    FILE *fp;
++	    char buf[4096];
+ 
+ 	    int error_code = 200;
+ 	    char error_msg[128];
+@@ -122,17 +112,18 @@ int main(int argc, char **argv)
+ 		error_code = 501;
+ 		sprintf(error_msg, "501 Not Implemented");
+     	    }
++	
+ 
+ 	    //Contains /../
+ 	    if((strstr(dir, "/..") != NULL)) {
+ 	       	error_code = 403;
+-		sprintf(error_msg, "403");
++		sprintf(error_msg, "403 Forbidden");
+ 	    }
+ 
+ 	    //Contains /..
+-	    if(strlen(dir) >= 3 && strncmp( dir+strlen(dir)-3, "/..", 3 ) == 0) {
++	    if(strlen(dir) >= 3 && strncmp(dir+strlen(dir)-3, "/..", 3) == 0) {
+ 		error_code = 403;
+-		sprintf(error_msg, "403");
++		sprintf(error_msg, "403 Forbidden");
+ 	    }
+ 
+ 	    //Index.html
+@@ -146,61 +137,55 @@ int main(int argc, char **argv)
+ 	    if(dir[0] != '/') {
+ 		error_code = 400;
+ 		sprintf(error_msg, "400 Bad Request");
+-
+-	    dir = strcat(web_root, dir);
+-	    printf("file dir [%s]\n", dir);
+-	    
+-	    //Construct Response Header
+-	    char response_header[4096];
+-	    
+-	    
+-	    if(error_code == 200 ) {
+-		sprintf(response_header, " ");
+-
+ 	    }
+ 
+-
+-
++	    dir = strcat(web_root, dir);
++	    printf("File dir: %s\n", dir);	    
+ 
+ 	    if((fp = fopen(dir, "rb")) == NULL) {
+ 		error_code = 404;
++		sprintf(error_msg, "404 Not Found");
++	    }
+ 
+-		snprintf(status, sizeof(status), "HTTP/1.0 404 Not Found\r\n\r\n%s 404 Not Found %s", bodystart, bodyend);
+-		if(send(clntsock, status, strlen(status), 0) < 0) {
+-		    perror("send failed");
+-		} else {
+-		    printf("send succeed %d\n", (int)strlen(status) );
+-		}
++	    //Personalized error Codes
++	    /* if(error_code == 501) {
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, bodyend);
+ 	    }
+-		
+-	    printf("response = %s", status);
+-	    fread(buf, 1, sizeof(buf), fp);
+-	    snprintf(status, sizeof(status), "HTTP/1.0 200 OK\r\n\r\n");
+-	    send(clntsock, status, strlen(status), 0);	
+-	    send(clntsock, &buf, strlen(buf), 0); // != strlen(buf)) {
+-	//	die("send failed");
+-        //	    }
+-	}
+ 
+-	//Construct response header
++	    if(error_code == 403) {
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s 403 Forbidden Request %s", error_msg, bodystart, bodyend);
++	    }*/ 
++
++	    //Construct Response Header
++	    char response_header[4096];
+ 
++	    if(error_code == 200) {
++		sprintf(response_header, "HTTP/1.0 %d OK\r\n\r\n", error_code);
++	    } else {
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend); //Generic Error Code
++	    }
+ 
+-	// Send Header
+-	    
+-	    if( error_code == 200 ) {
+-		// send body
++	    //Send Response Header
++	    if(error_code != 200) {
++	//	printf("%d "%s" %s", clntIP, firstline, error_msg);
++	        printf("ERROR CODE: %d\n", error_code);
++		send(clntsock, response_header, strlen(response_header), 0);
++		close(clntsock);
+ 	    }
+ 	    
++	    //READ AND SEND FILE
++	    if(error_code == 200) {
++		printf("ERROR CODE: %d\n", error_code);
++		fread(buf, 1, sizeof(buf), fp);
++		send(clntsock, response_header, strlen(response_header), 0);
++		send(clntsock, &buf, strlen(buf), 0);
++	    }	 
++
++	    //  snprintf(status, sizeof(status), "HTTP/1.0 200 OK\r\n\r\n");
++	    
++	    //Close Socket and Exit
++	    close(clntsock);
++	    die("Successfully sent"); 
+ 	}
+-
+-	
+-	//Close socket and exit
+-
+-    	    /*printf( "header = [%s]\n", header );
+-	    header = strcat(web_root, header);
+-	    printf("destination = [%s]\n", header);	    
+-	    FILE *fp;
+-	    if(fp = fopen(header, "rb") == NULL) {	   
+-	    }*/	      	   
+-    }   
++	}	
+ }
+-- 
+2.17.1
+
+
+From 9d52a9c610471fbfe1f64be0f83ed5c3e2f4caf8 Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Tue, 16 Apr 2019 00:06:28 -0400
+Subject: [PATCH 05/14] Added logging, need to fix the output however, also
+ need to fix displaying images correctly and preventing use of /.. /../
+
+---
+ http-server.c | 199 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 199 insertions(+)
+ create mode 100644 http-server.c
+
+diff --git a/http-server.c b/http-server.c
+new file mode 100644
+index 0000000..4a31221
+--- /dev/null
++++ b/http-server.c
+@@ -0,0 +1,199 @@
++/*
++ * tcp-recver.c
++ */
++
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <assert.h>
++#include <unistd.h>
++#include <sys/wait.h>
++#include <sys/stat.h>
++#include <arpa/inet.h>
++#include <sys/types.h>
++#include <sys/socket.h>
++
++static void die(const char *s) { 
++    perror(s); 
++    exit(1); 
++}
++
++/*static void statuscode(char *status) {
++    snprintf(status, sizeof(status),  
++}*/
++
++int main(int argc, char **argv)
++{
++    if (argc != 3) {
++        fprintf(stderr, "usage: %s <server-port> <web_root> <mdb-lookup-host> <mdb-lookup-port>\n", argv[0]);
++        exit(1);
++    }
++
++    unsigned short port = atoi(argv[1]);
++    char *web_root = argv[2];
++
++    // Create a listening socket (also called server socket) 
++    int servsock;
++    if ((servsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
++        die("socket failed");
++
++    // Construct local address structure
++    struct sockaddr_in servaddr;
++    memset(&servaddr, 0, sizeof(servaddr));
++    servaddr.sin_family = AF_INET;
++    servaddr.sin_addr.s_addr = htonl(INADDR_ANY); // any network interface
++    servaddr.sin_port = htons(port);
++
++    // Bind to the local address
++    if (bind(servsock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)
++        die("bind failed");
++
++    // Start listening for incoming connections
++    if (listen(servsock, 5 /* queue size for connection requests */ ) < 0)
++        die("listen failed");
++
++    int clntsock;
++    socklen_t clntlen;
++    struct sockaddr_in clntaddr;
++    pid_t pid; // fork value ****
++    char bodystart[] = "<html><body><h1>";
++    char bodyend[] = "</h1></body></html>";
++    char quote[] = "\"";
++   // char buf[4096];
++
++    while (1) {
++        clntlen = sizeof(clntaddr); // initialize the in-out parameter
++        if ((clntsock = accept(servsock, (struct sockaddr *) &clntaddr, &clntlen)) < 0) {
++            die("accept failed");
++	}
++
++	//CLIENT IP ADDRESS
++
++	//FORK CHILD PROCESS LOOP
++	pid = fork(); // fork here
++	
++	if(pid == 0) { // were in the child, do the code here ***
++	    char firstline[1000];
++	    char *dir;	    
++	    FILE *clntInput;
++	    FILE *fp;
++	    char buf[4096];
++	    int error_code = 200;
++	    char error_msg[128];
++	    char *clntip = inet_ntoa(clntaddr.sin_addr);
++	    
++	    sprintf( error_msg, "OK" );
++	    clntInput = fdopen(clntsock, "r");
++	    
++
++
++	    // Parse Header Request
++	    fgets(firstline, sizeof(firstline) - 1, clntInput);
++	   
++/*	    //Contains /../
++	    if((strstr(firstline, "/../") != NULL )){
++		//strstr(firstline, "/..") != NULL)) {	        
++		printf("here");
++		error_code = 403;
++		sprintf(error_msg, "403 ERROR");
++	    }
++
++	    //Contains /..
++	    if(strlen(dir) >= 3 && (strncmp(dir + strelen(dir) -3, "/", 3) == 0)) {
++		error_code = 403;
++		sprintf(error_msg, "403 ERROR");
++	    }*/
++
++	   /* char *ipString = inet_ntoa(clntaddr.sin_addr);
++	    printf("CLIENT IP: %s\n", ipString);*/
++
++	    //Begins with GET
++	    if(strncmp(firstline, "GET", 3) == 0 ) {
++	        dir = strchr(firstline, '/');
++	        for(int i = 0; i < strlen(dir); i++) {
++		    if((dir[i] == ' ') || dir[i] == '\r') {
++		        dir[i] = '\0';
++	   	    }
++	        }
++	    } else {
++		error_code = 501;
++		sprintf(error_msg, "501 Not Implemented");
++    	    }
++	
++
++	    //Contains /../
++	    if((strstr(dir, "/..") != NULL)) {
++	       	error_code = 403;
++		sprintf(error_msg, "403 Forbidden");
++	    }
++
++	    //Contains /..
++	    if(strlen(dir) >= 3 && strncmp(dir+strlen(dir)-3, "/..", 3) == 0) {
++		error_code = 403;
++		sprintf(error_msg, "403 Forbidden");
++	    }
++
++	    //Index.html
++	    if(((dir[strlen(dir)-1]) == '/') && (strcmp(dir, "/cs3157/tng/") == 0))  {
++	       	error_code = 200;
++		sprintf(dir, "%s%s", dir, "index.html");
++		sprintf(error_msg, "200 OK");
++	    }
++
++	    //Dir beginds with /
++	    if(dir[0] != '/') {
++		error_code = 400;
++		sprintf(error_msg, "400 Bad Request");
++	    }
++
++	    dir = strcat(web_root, dir);
++	    printf("File dir: %s\n", dir);	    
++
++	    if((fp = fopen(dir, "rb")) == NULL) {
++		error_code = 404;
++		sprintf(error_msg, "404 Not Found");
++	    }
++
++	    //Personalized error Codes
++	    /* if(error_code == 501) {
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, bodyend);
++	    }
++
++	    if(error_code == 403) {
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s 403 Forbidden Request %s", error_msg, bodystart, bodyend);
++	    }*/ 
++
++	    //Construct Response Header
++	    char response_header[4096];
++
++	    if(error_code == 200) {
++		sprintf(response_header, "HTTP/1.0 %d OK\r\n\r\n", error_code);
++	    } else {
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend); //Generic Error Code
++	    }
++
++	    //Send Response Header
++	    if(error_code != 200) {
++	 	printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
++	        printf("ERROR CODE: %d\n", error_code);
++		send(clntsock, response_header, strlen(response_header), 0);
++		close(clntsock);
++	    }
++	    
++	    //READ AND SEND FILE
++	    if(error_code == 200) {
++		printf("%s %s%s%s %s\n", clntip, quote, firstline, quote, error_msg);
++		printf("ERROR CODE: %d\n", error_code);
++		fread(buf, 1, sizeof(buf), fp);
++		send(clntsock, response_header, strlen(response_header), 0);
++		send(clntsock, &buf, strlen(buf), 0);
++	    }	 
++
++	    //  snprintf(status, sizeof(status), "HTTP/1.0 200 OK\r\n\r\n");
++	    
++	    //Close Socket and Exit
++	    close(clntsock);
++	    die("Successfully sent"); 
++	}
++	}	
++}
+-- 
+2.17.1
+
+
+From 9ed431efcd8d55e2fb118bf26e8e7927d54708c3 Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Tue, 16 Apr 2019 01:31:48 -0400
+Subject: [PATCH 06/14] Fixed displaying jpegs, still need to fix some error
+ checks and clean up code. Will then move onto part b
+
+---
+ http-server.c | 82 +++++++++++++--------------------------------------
+ 1 file changed, 20 insertions(+), 62 deletions(-)
+
+diff --git a/http-server.c b/http-server.c
+index 4a31221..e951c6a 100644
+--- a/http-server.c
++++ b/http-server.c
+@@ -18,10 +18,6 @@ static void die(const char *s) {
+     exit(1); 
+ }
+ 
+-/*static void statuscode(char *status) {
+-    snprintf(status, sizeof(status),  
+-}*/
+-
+ int main(int argc, char **argv)
+ {
+     if (argc != 3) {
+@@ -58,8 +54,6 @@ int main(int argc, char **argv)
+     pid_t pid; // fork value ****
+     char bodystart[] = "<html><body><h1>";
+     char bodyend[] = "</h1></body></html>";
+-    char quote[] = "\"";
+-   // char buf[4096];
+ 
+     while (1) {
+         clntlen = sizeof(clntaddr); // initialize the in-out parameter
+@@ -67,8 +61,6 @@ int main(int argc, char **argv)
+             die("accept failed");
+ 	}
+ 
+-	//CLIENT IP ADDRESS
+-
+ 	//FORK CHILD PROCESS LOOP
+ 	pid = fork(); // fork here
+ 	
+@@ -82,31 +74,12 @@ int main(int argc, char **argv)
+ 	    char error_msg[128];
+ 	    char *clntip = inet_ntoa(clntaddr.sin_addr);
+ 	    
+-	    sprintf( error_msg, "OK" );
++	    sprintf(error_msg, "200 OK");
+ 	    clntInput = fdopen(clntsock, "r");
+ 	    
+-
+-
+ 	    // Parse Header Request
+ 	    fgets(firstline, sizeof(firstline) - 1, clntInput);
+ 	   
+-/*	    //Contains /../
+-	    if((strstr(firstline, "/../") != NULL )){
+-		//strstr(firstline, "/..") != NULL)) {	        
+-		printf("here");
+-		error_code = 403;
+-		sprintf(error_msg, "403 ERROR");
+-	    }
+-
+-	    //Contains /..
+-	    if(strlen(dir) >= 3 && (strncmp(dir + strelen(dir) -3, "/", 3) == 0)) {
+-		error_code = 403;
+-		sprintf(error_msg, "403 ERROR");
+-	    }*/
+-
+-	   /* char *ipString = inet_ntoa(clntaddr.sin_addr);
+-	    printf("CLIENT IP: %s\n", ipString);*/
+-
+ 	    //Begins with GET
+ 	    if(strncmp(firstline, "GET", 3) == 0 ) {
+ 	        dir = strchr(firstline, '/');
+@@ -118,11 +91,11 @@ int main(int argc, char **argv)
+ 	    } else {
+ 		error_code = 501;
+ 		sprintf(error_msg, "501 Not Implemented");
+-    	    }
+-	
++    	    }	
+ 
++	    printf("DIRECTORY[%s]\n", dir);
+ 	    //Contains /../
+-	    if((strstr(dir, "/..") != NULL)) {
++	    if((strstr(dir, "/../") != NULL)) {
+ 	       	error_code = 403;
+ 		sprintf(error_msg, "403 Forbidden");
+ 	    }
+@@ -135,34 +108,25 @@ int main(int argc, char **argv)
+ 
+ 	    //Index.html
+ 	    if(((dir[strlen(dir)-1]) == '/') && (strcmp(dir, "/cs3157/tng/") == 0))  {
+-	       	error_code = 200;
+ 		sprintf(dir, "%s%s", dir, "index.html");
+-		sprintf(error_msg, "200 OK");
+ 	    }
+ 
+-	    //Dir beginds with /
++	    //dir beginds with /
+ 	    if(dir[0] != '/') {
+ 		error_code = 400;
+ 		sprintf(error_msg, "400 Bad Request");
+ 	    }
+ 
++	    //Create dir path
+ 	    dir = strcat(web_root, dir);
+ 	    printf("File dir: %s\n", dir);	    
+ 
+-	    if((fp = fopen(dir, "rb")) == NULL) {
++	    //Check if dir exists
++	    if((fp = fopen(dir, "rb+")) == NULL) {
+ 		error_code = 404;
+ 		sprintf(error_msg, "404 Not Found");
+ 	    }
+ 
+-	    //Personalized error Codes
+-	    /* if(error_code == 501) {
+-		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, bodyend);
+-	    }
+-
+-	    if(error_code == 403) {
+-		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s 403 Forbidden Request %s", error_msg, bodystart, bodyend);
+-	    }*/ 
+-
+ 	    //Construct Response Header
+ 	    char response_header[4096];
+ 
+@@ -172,28 +136,22 @@ int main(int argc, char **argv)
+ 		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend); //Generic Error Code
+ 	    }
+ 
+-	    //Send Response Header
+-	    if(error_code != 200) {
+-	 	printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
+-	        printf("ERROR CODE: %d\n", error_code);
+-		send(clntsock, response_header, strlen(response_header), 0);
+-		close(clntsock);
+-	    }
+-	    
++	    //Send Response Header	    
++    	    printf("%s \"%s\" %s\n", clntip, firstline, error_msg);	       
++	    printf("ERROR CODE: %d\n", error_code);
++	    send(clntsock, response_header, strlen(response_header), 0);
++	   
+ 	    //READ AND SEND FILE
++	    size_t nread;
+ 	    if(error_code == 200) {
+-		printf("%s %s%s%s %s\n", clntip, quote, firstline, quote, error_msg);
+-		printf("ERROR CODE: %d\n", error_code);
+-		fread(buf, 1, sizeof(buf), fp);
+-		send(clntsock, response_header, strlen(response_header), 0);
+-		send(clntsock, &buf, strlen(buf), 0);
+-	    }	 
+-
+-	    //  snprintf(status, sizeof(status), "HTTP/1.0 200 OK\r\n\r\n");
+-	    
++	        while((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
++		    send(clntsock, buf, nread, 0);
++		} 
++	    }
++	   
+ 	    //Close Socket and Exit
+ 	    close(clntsock);
+ 	    die("Successfully sent"); 
+ 	}
+-	}	
++    }	
+ }
+-- 
+2.17.1
+
+
+From bbfbaba60b63971e65a33ba86ec84bada025e19f Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Fri, 19 Apr 2019 02:03:15 -0400
+Subject: [PATCH 07/14] Connection to mdb server on local host established,
+ need to work on parsing mdb lookup requests
+
+---
+ http-server.c | 146 +++++++++++++++++++++++++++++++++++++++-----------
+ 1 file changed, 114 insertions(+), 32 deletions(-)
+
+diff --git a/http-server.c b/http-server.c
+index e951c6a..af950c7 100644
+--- a/http-server.c
++++ b/http-server.c
+@@ -12,23 +12,33 @@
+ #include <arpa/inet.h>
+ #include <sys/types.h>
+ #include <sys/socket.h>
++#include <netdb.h>
++#include <netinet/in.h>
+ 
+-static void die(const char *s) { 
+-    perror(s); 
+-    exit(1); 
++
++static void die(const char *s) {
++    perror(s);
++    exit(1);
+ }
+ 
+ int main(int argc, char **argv)
+ {
+-    if (argc != 3) {
++    if (argc != 5) {
+         fprintf(stderr, "usage: %s <server-port> <web_root> <mdb-lookup-host> <mdb-lookup-port>\n", argv[0]);
+         exit(1);
+     }
+ 
+     unsigned short port = atoi(argv[1]);
+     char *web_root = argv[2];
++    char *mdbhost = argv[3];
++    unsigned short mdbport = atoi(argv[4]);
++    int mdbsock;
++
++    //MOVE ALL MDB CONNECTION HERE
++    
+ 
+-    // Create a listening socket (also called server socket) 
++
++    // Create a listening socket (also called server socket)
+     int servsock;
+     if ((servsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+         die("socket failed");
+@@ -44,6 +54,46 @@ int main(int argc, char **argv)
+     if (bind(servsock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)
+         die("bind failed");
+ 
++
++    // Connect to mdb-lookup server
++    struct hostent *he;
++    if ((he = gethostbyname(mdbhost)) == NULL) {
++        die("gethostbyname failed");
++    }
++
++    char *mdbIP = inet_ntoa(*(struct in_addr *) he->h_addr);
++ 
++    if((mdbsock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
++        die("socket failed");
++    } 
++
++    // Construct a mdb server address structure
++    struct sockaddr_in mdbservaddr;
++    memset(&mdbservaddr, 0, sizeof(mdbservaddr)); // must zero out the structure
++    mdbservaddr.sin_family = AF_INET;
++    mdbservaddr.sin_addr.s_addr = inet_addr(mdbIP); //CHANGED from ip to serverIp ***
++    mdbservaddr.sin_port = htons(mdbport); // must be in network byte order
++
++
++    //Connect to mdb server
++    if(connect(mdbsock,(struct sockaddr *) &mdbservaddr, sizeof(mdbservaddr)) < 0) {
++        die("connect failed"); 
++    }
++   
++    char nam[] = "nam\n"; 
++    send(mdbsock, &nam, strlen(nam)+1, 0);
++    char buftest[4096];
++    FILE *mdbtest = fdopen( mdbsock, "r+b" );
++    while(1) {
++	fgets( buftest, sizeof(buftest), mdbtest );
++	printf( "recved= [%s]\n", buftest );
++	if( buftest[0] == '\n' ) {
++	    break;
++	}
++    }
++
++    FILE *mdbinput = fdopen(mdbsock, "r+b");
++
+     // Start listening for incoming connections
+     if (listen(servsock, 5 /* queue size for connection requests */ ) < 0)
+         die("listen failed");
+@@ -51,10 +101,25 @@ int main(int argc, char **argv)
+     int clntsock;
+     socklen_t clntlen;
+     struct sockaddr_in clntaddr;
+-    pid_t pid; // fork value ****
++
++    //PID
++    pid_t pid;
++
++    //HTML Formatting
+     char bodystart[] = "<html><body><h1>";
+     char bodyend[] = "</h1></body></html>";
+ 
++    //MDB Formatting
++    const char *form =
++	"<h1>mdb-lookup</h1>\n"
++	"<p>\n"
++	"<form method=GET action=/mdb-lookup>\n"
++	"lookup: <input type=text name=key>\n"
++	"<input type=submit>\n"
++	"</form>\n"
++	"<p>\n";
++
++
+     while (1) {
+         clntlen = sizeof(clntaddr); // initialize the in-out parameter
+         if ((clntsock = accept(servsock, (struct sockaddr *) &clntaddr, &clntlen)) < 0) {
+@@ -62,38 +127,44 @@ int main(int argc, char **argv)
+ 	}
+ 
+ 	//FORK CHILD PROCESS LOOP
+-	pid = fork(); // fork here
+-	
++	pid = fork();
++
+ 	if(pid == 0) { // were in the child, do the code here ***
+ 	    char firstline[1000];
+-	    char *dir;	    
++	    char *dir;
+ 	    FILE *clntInput;
+ 	    FILE *fp;
+ 	    char buf[4096];
+ 	    int error_code = 200;
++	    int get = 1;
+ 	    char error_msg[128];
+ 	    char *clntip = inet_ntoa(clntaddr.sin_addr);
+-	    
++
+ 	    sprintf(error_msg, "200 OK");
+ 	    clntInput = fdopen(clntsock, "r");
+-	    
++
+ 	    // Parse Header Request
+ 	    fgets(firstline, sizeof(firstline) - 1, clntInput);
+-	   
++
++	    //index/hthtarfeaf/index.html
+ 	    //Begins with GET
+ 	    if(strncmp(firstline, "GET", 3) == 0 ) {
+-	        dir = strchr(firstline, '/');
+-	        for(int i = 0; i < strlen(dir); i++) {
++	        if ((dir = strchr(firstline, '/') != NULL)) {
++	        	for(int i = 0; i < strlen(dir); i++) {
+ 		    if((dir[i] == ' ') || dir[i] == '\r') {
+ 		        dir[i] = '\0';
+ 	   	    }
+-	        }
+-	    } else {
++	        	}
++	    	} else {
++		    //
++	    	}
++	    }else {
+ 		error_code = 501;
+ 		sprintf(error_msg, "501 Not Implemented");
+-    	    }	
++    	    }
+ 
+ 	    printf("DIRECTORY[%s]\n", dir);
++
+ 	    //Contains /../
+ 	    if((strstr(dir, "/../") != NULL)) {
+ 	       	error_code = 403;
+@@ -106,22 +177,33 @@ int main(int argc, char **argv)
+ 		sprintf(error_msg, "403 Forbidden");
+ 	    }
+ 
+-	    //Index.html
+-	    if(((dir[strlen(dir)-1]) == '/') && (strcmp(dir, "/cs3157/tng/") == 0))  {
++            //If dir ends with / append Index.html
++	    if((dir[strlen(dir)-1]) == '/' && get != 1) {        // && (strcmp(dir, "/cs3157/tng/") == 0))  {
+ 		sprintf(dir, "%s%s", dir, "index.html");
++	    } else {		
++		if((dir[strlen(dir)-1]) != '/' && get != 1) {
++		    sprintf(dir, "%s%s", dir, "/index.html");
++		}	    
+ 	    }
+-
++//MDB-lookup
+ 	    //dir beginds with /
+ 	    if(dir[0] != '/') {
+ 		error_code = 400;
+ 		sprintf(error_msg, "400 Bad Request");
+ 	    }
+ 
+-	    //Create dir path
++	    //change this to work
++	    if(strcmp(dir, "/mdb-lookup") == 0) { 
++		
++		error_code = 200;
++	    }
++
++
++//to be changed	    //Create dir path
+ 	    dir = strcat(web_root, dir);
+-	    printf("File dir: %s\n", dir);	    
++	    printf("File dir: %s\n", dir);
+ 
+-	    //Check if dir exists
++//to be changed	    //Check if dir exists
+ 	    if((fp = fopen(dir, "rb+")) == NULL) {
+ 		error_code = 404;
+ 		sprintf(error_msg, "404 Not Found");
+@@ -131,27 +213,27 @@ int main(int argc, char **argv)
+ 	    char response_header[4096];
+ 
+ 	    if(error_code == 200) {
+-		sprintf(response_header, "HTTP/1.0 %d OK\r\n\r\n", error_code);
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n", error_msg);
+ 	    } else {
+ 		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend); //Generic Error Code
+ 	    }
+ 
+-	    //Send Response Header	    
+-    	    printf("%s \"%s\" %s\n", clntip, firstline, error_msg);	       
++	    //Send Response Header
++    	    printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
+ 	    printf("ERROR CODE: %d\n", error_code);
+ 	    send(clntsock, response_header, strlen(response_header), 0);
+-	   
+-	    //READ AND SEND FILE
++
++//to be changed	    //READ AND SEND FILE
+ 	    size_t nread;
+ 	    if(error_code == 200) {
+ 	        while((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
+ 		    send(clntsock, buf, nread, 0);
+-		} 
++		}
+ 	    }
+-	   
++
+ 	    //Close Socket and Exit
+ 	    close(clntsock);
+-	    die("Successfully sent"); 
++	    die("Successfully sent");
+ 	}
+-    }	
++    }
+ }
+-- 
+2.17.1
+
+
+From 863d4d2b3ca7406a2279e79abae033c57d8856d8 Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Fri, 19 Apr 2019 16:14:18 -0400
+Subject: [PATCH 08/14] Trying to fix error checking and displaying mdb page
+
+---
+ http-server.c | 109 ++++++++++++++++++++++++++++----------------------
+ 1 file changed, 62 insertions(+), 47 deletions(-)
+
+diff --git a/http-server.c b/http-server.c
+index af950c7..d6b0dd5 100644
+--- a/http-server.c
++++ b/http-server.c
+@@ -23,39 +23,19 @@ static void die(const char *s) {
+ 
+ int main(int argc, char **argv)
+ {
+-    if (argc != 5) {
++    if (argc != 3) {
+         fprintf(stderr, "usage: %s <server-port> <web_root> <mdb-lookup-host> <mdb-lookup-port>\n", argv[0]);
+         exit(1);
+     }
+ 
+     unsigned short port = atoi(argv[1]);
+     char *web_root = argv[2];
+-    char *mdbhost = argv[3];
++  /*  char *mdbhost = argv[3];
+     unsigned short mdbport = atoi(argv[4]);
+     int mdbsock;
+ 
+     //MOVE ALL MDB CONNECTION HERE
+-    
+-
+-
+-    // Create a listening socket (also called server socket)
+-    int servsock;
+-    if ((servsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
+-        die("socket failed");
+-
+-    // Construct local address structure
+-    struct sockaddr_in servaddr;
+-    memset(&servaddr, 0, sizeof(servaddr));
+-    servaddr.sin_family = AF_INET;
+-    servaddr.sin_addr.s_addr = htonl(INADDR_ANY); // any network interface
+-    servaddr.sin_port = htons(port);
+-
+-    // Bind to the local address
+-    if (bind(servsock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)
+-        die("bind failed");
+-
+-
+-    // Connect to mdb-lookup server
++      // Connect to mdb-lookup server
+     struct hostent *he;
+     if ((he = gethostbyname(mdbhost)) == NULL) {
+         die("gethostbyname failed");
+@@ -78,8 +58,25 @@ int main(int argc, char **argv)
+     //Connect to mdb server
+     if(connect(mdbsock,(struct sockaddr *) &mdbservaddr, sizeof(mdbservaddr)) < 0) {
+         die("connect failed"); 
+-    }
+-   
++    }*/
++
++    // Create a listening socket (also called server socket)
++    int servsock;
++    if ((servsock = socket(AF_INET, SOCK_STREAM, 0)) < 0)
++        die("socket failed");
++
++    // Construct local address structure
++    struct sockaddr_in servaddr;
++    memset(&servaddr, 0, sizeof(servaddr));
++    servaddr.sin_family = AF_INET;
++    servaddr.sin_addr.s_addr = htonl(INADDR_ANY); // any network interface
++    servaddr.sin_port = htons(port);
++
++    // Bind to the local address
++    if (bind(servsock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)
++        die("bind failed");
++
++ /*   //Testing MDB here 
+     char nam[] = "nam\n"; 
+     send(mdbsock, &nam, strlen(nam)+1, 0);
+     char buftest[4096];
+@@ -90,9 +87,9 @@ int main(int argc, char **argv)
+ 	if( buftest[0] == '\n' ) {
+ 	    break;
+ 	}
+-    }
++    }*/
+ 
+-    FILE *mdbinput = fdopen(mdbsock, "r+b");
++  //  FILE *mdbinput = fdopen(mdbsock, "r+b");
+ 
+     // Start listening for incoming connections
+     if (listen(servsock, 5 /* queue size for connection requests */ ) < 0)
+@@ -136,7 +133,7 @@ int main(int argc, char **argv)
+ 	    FILE *fp;
+ 	    char buf[4096];
+ 	    int error_code = 200;
+-	    int get = 1;
++	    int mdbflag = 0;
+ 	    char error_msg[128];
+ 	    char *clntip = inet_ntoa(clntaddr.sin_addr);
+ 
+@@ -149,19 +146,28 @@ int main(int argc, char **argv)
+ 	    //index/hthtarfeaf/index.html
+ 	    //Begins with GET
+ 	    if(strncmp(firstline, "GET", 3) == 0 ) {
+-	        if ((dir = strchr(firstline, '/') != NULL)) {
+-	        	for(int i = 0; i < strlen(dir); i++) {
+-		    if((dir[i] == ' ') || dir[i] == '\r') {
+-		        dir[i] = '\0';
+-	   	    }
+-	        	}
+-	    	} else {
+-		    //
+-	    	}
+-	    }else {
++       	//     	if(dir = strchr(firstline, '/') != NULL){
++	         dir=strchr(firstline, '/');
++ 		 for(int i = 0; i < strlen(dir); i++) {
++ 		     if((dir[i] == ' ') || dir[i] == '\r') {
++ 			 dir[i] = '\0';
++		     }
++		 }
++	    //	} else {		
++	    }/* else {
+ 		error_code = 501;
+ 		sprintf(error_msg, "501 Not Implemented");
+-    	    }
++    	    }*/
++
++	    if(strncmp(firstline, "GET", 3) != 0) {
++		error_code = 501;
++		sprintf(error_msg, "501 Not Implemented");
++	    }
++
++	    if(strncmp(firstline, "GET /", 4) != 0) {
++		error_code = 400;
++		sprintf(error_msg, "400 Bad Request");
++	    }
+ 
+ 	    printf("DIRECTORY[%s]\n", dir);
+ 
+@@ -177,14 +183,14 @@ int main(int argc, char **argv)
+ 		sprintf(error_msg, "403 Forbidden");
+ 	    }
+ 
+-            //If dir ends with / append Index.html
+-	    if((dir[strlen(dir)-1]) == '/' && get != 1) {        // && (strcmp(dir, "/cs3157/tng/") == 0))  {
++/*            //If dir ends with / append Index.html
++	    if((dir[strlen(dir)-1]) == '/') {        // && (strcmp(dir, "/cs3157/tng/") == 0))  {
+ 		sprintf(dir, "%s%s", dir, "index.html");
+ 	    } else {		
+-		if((dir[strlen(dir)-1]) != '/' && get != 1) {
++		if((dir[strlen(dir)-1]) != '/') {
+ 		    sprintf(dir, "%s%s", dir, "/index.html");
+ 		}	    
+-	    }
++	    }*/
+ //MDB-lookup
+ 	    //dir beginds with /
+ 	    if(dir[0] != '/') {
+@@ -193,18 +199,18 @@ int main(int argc, char **argv)
+ 	    }
+ 
+ 	    //change this to work
+-	    if(strcmp(dir, "/mdb-lookup") == 0) { 
+-		
++	    if(strcmp(dir, "/mdb-lookup") == 0) { 		
+ 		error_code = 200;
++		mdbflag = 1;
++		
+ 	    }
+ 
+-
+ //to be changed	    //Create dir path
+ 	    dir = strcat(web_root, dir);
+ 	    printf("File dir: %s\n", dir);
+ 
+ //to be changed	    //Check if dir exists
+-	    if((fp = fopen(dir, "rb+")) == NULL) {
++	    if((fp = fopen(dir, "rb+")) == NULL && mdbflag != 1) {
+ 		error_code = 404;
+ 		sprintf(error_msg, "404 Not Found");
+ 	    }
+@@ -212,11 +218,20 @@ int main(int argc, char **argv)
+ 	    //Construct Response Header
+ 	    char response_header[4096];
+ 
++	    if(mdbflag != 1) {
+ 	    if(error_code == 200) {
+ 		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n", error_msg);
+ 	    } else {
+ 		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend); //Generic Error Code
+ 	    }
++	    }
++
++	    if(mdbflag == 1) {
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s", error_msg, form);
++		send(clntsock, response_header, strlen(response_header), 0);
++	    }
++
++	    
+ 
+ 	    //Send Response Header
+     	    printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
+-- 
+2.17.1
+
+
+From deeea2e305909a7a7573afeb1a3c52424f9d5164 Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Fri, 19 Apr 2019 17:44:54 -0400
+Subject: [PATCH 09/14] Fixed some error checks, need to parse mdb key and
+ send/receive to and from mdb server
+
+---
+ http-server.c | 168 ++++++++++++++++++++++++++++++++------------------
+ 1 file changed, 107 insertions(+), 61 deletions(-)
+
+diff --git a/http-server.c b/http-server.c
+index d6b0dd5..c8b1626 100644
+--- a/http-server.c
++++ b/http-server.c
+@@ -23,19 +23,32 @@ static void die(const char *s) {
+ 
+ int main(int argc, char **argv)
+ {
+-    if (argc != 3) {
++    if (argc != 5) {
+         fprintf(stderr, "usage: %s <server-port> <web_root> <mdb-lookup-host> <mdb-lookup-port>\n", argv[0]);
+         exit(1);
+     }
+ 
+     unsigned short port = atoi(argv[1]);
+     char *web_root = argv[2];
+-  /*  char *mdbhost = argv[3];
++    char *mdbhost = argv[3];
+     unsigned short mdbport = atoi(argv[4]);
+     int mdbsock;
+ 
+-    //MOVE ALL MDB CONNECTION HERE
+-      // Connect to mdb-lookup server
++    //HTML Formatting
++    char bodystart[] = "<html><body><h1>";
++    char bodyend[] = "</h1></body></html>";
++
++    //MDB Formatting
++    const char *form =
++	"<h1>mdb-lookup</h1>\n"
++	"<p>\n"
++	"<form method=GET action=/mdb-lookup>\n"
++	"lookup: <input type=text name=key>\n"
++	"<input type=submit>\n"
++	"</form>\n"
++	"<p>\n";
++
++    //CREATING MDB CONNECTION
+     struct hostent *he;
+     if ((he = gethostbyname(mdbhost)) == NULL) {
+         die("gethostbyname failed");
+@@ -47,18 +60,17 @@ int main(int argc, char **argv)
+         die("socket failed");
+     } 
+ 
+-    // Construct a mdb server address structure
++    //CONSTRUCT MDB SERVER
+     struct sockaddr_in mdbservaddr;
+     memset(&mdbservaddr, 0, sizeof(mdbservaddr)); // must zero out the structure
+     mdbservaddr.sin_family = AF_INET;
+     mdbservaddr.sin_addr.s_addr = inet_addr(mdbIP); //CHANGED from ip to serverIp ***
+     mdbservaddr.sin_port = htons(mdbport); // must be in network byte order
+ 
+-
+-    //Connect to mdb server
++    //CONNECT TO MDB SERVER
+     if(connect(mdbsock,(struct sockaddr *) &mdbservaddr, sizeof(mdbservaddr)) < 0) {
+         die("connect failed"); 
+-    }*/
++    }
+ 
+     // Create a listening socket (also called server socket)
+     int servsock;
+@@ -89,7 +101,7 @@ int main(int argc, char **argv)
+ 	}
+     }*/
+ 
+-  //  FILE *mdbinput = fdopen(mdbsock, "r+b");
++    FILE *mdbinput = fdopen(mdbsock, "r+b");
+ 
+     // Start listening for incoming connections
+     if (listen(servsock, 5 /* queue size for connection requests */ ) < 0)
+@@ -102,7 +114,7 @@ int main(int argc, char **argv)
+     //PID
+     pid_t pid;
+ 
+-    //HTML Formatting
++ /*   //HTML Formatting
+     char bodystart[] = "<html><body><h1>";
+     char bodyend[] = "</h1></body></html>";
+ 
+@@ -115,7 +127,7 @@ int main(int argc, char **argv)
+ 	"<input type=submit>\n"
+ 	"</form>\n"
+ 	"<p>\n";
+-
++*/
+ 
+     while (1) {
+         clntlen = sizeof(clntaddr); // initialize the in-out parameter
+@@ -136,6 +148,8 @@ int main(int argc, char **argv)
+ 	    int mdbflag = 0;
+ 	    char error_msg[128];
+ 	    char *clntip = inet_ntoa(clntaddr.sin_addr);
++	    char *isfile;
++	    char *mdbkey;
+ 
+ 	    sprintf(error_msg, "200 OK");
+ 	    clntInput = fdopen(clntsock, "r");
+@@ -143,34 +157,40 @@ int main(int argc, char **argv)
+ 	    // Parse Header Request
+ 	    fgets(firstline, sizeof(firstline) - 1, clntInput);
+ 
+-	    //index/hthtarfeaf/index.html
+-	    //Begins with GET
+-	    if(strncmp(firstline, "GET", 3) == 0 ) {
+-       	//     	if(dir = strchr(firstline, '/') != NULL){
+-	         dir=strchr(firstline, '/');
+- 		 for(int i = 0; i < strlen(dir); i++) {
+- 		     if((dir[i] == ' ') || dir[i] == '\r') {
+- 			 dir[i] = '\0';
+-		     }
+-		 }
+-	    //	} else {		
+-	    }/* else {
++/*	    if(strncmp(firstline, "GET /", 4) != 0) {
++		error_code = 400;
++		sprintf(error_msg, "400 Bad Request");
++	    }
++  
++            if(strncmp(firstline, "GET", 3) != 0) {
+ 		error_code = 501;
+ 		sprintf(error_msg, "501 Not Implemented");
+-    	    }*/
++	    }*/
+ 
+-	    if(strncmp(firstline, "GET", 3) != 0) {
++	    //Begins with GET
++	    if(strncmp(firstline, "GET /", 4) == 0 ) {
++		if(firstline[4] == '/') {
++    		    dir=strchr(firstline, '/');
++    		    for(int i = 0; i < strlen(dir); i++) {
++    			if((dir[i] == ' ') || dir[i] == '\r') {
++			    dir[i] = '\0';
++    			}
++    		    }		
++    		} else {
++		    error_code = 400;
++		    sprintf(error_msg, "400 Bad Request");
++    		}
++	    } else {
+ 		error_code = 501;
+ 		sprintf(error_msg, "501 Not Implemented");
+ 	    }
+-
+-	    if(strncmp(firstline, "GET /", 4) != 0) {
+-		error_code = 400;
+-		sprintf(error_msg, "400 Bad Request");
+-	    }
+-
++            
+ 	    printf("DIRECTORY[%s]\n", dir);
+ 
++	    //TO CHECK IF FILE
++	    isfile = strrchr(dir, '/');	 
++	    printf("Is File dir: %s\n", isfile);   
++
+ 	    //Contains /../
+ 	    if((strstr(dir, "/../") != NULL)) {
+ 	       	error_code = 403;
+@@ -183,47 +203,71 @@ int main(int argc, char **argv)
+ 		sprintf(error_msg, "403 Forbidden");
+ 	    }
+ 
+-/*            //If dir ends with / append Index.html
+-	    if((dir[strlen(dir)-1]) == '/') {        // && (strcmp(dir, "/cs3157/tng/") == 0))  {
+-		sprintf(dir, "%s%s", dir, "index.html");
+-	    } else {		
+-		if((dir[strlen(dir)-1]) != '/') {
+-		    sprintf(dir, "%s%s", dir, "/index.html");
+-		}	    
+-	    }*/
+-//MDB-lookup
++	   	    //CHECKING FOR MDB-LOOKUP IN URL
++	    if(strcmp(dir, "/mdb-lookup") == 0) { 		
++		error_code = 200;
++		mdbflag = 1;		
++	    }
++
++	    if(strstr(dir, "/mdb-lookup?key=") != 0) {
++		error_code = 200;
++		mdbflag = 2;
++	    }
++
++	    printf("MDB FLAG: %d\n", mdbflag);
++
++            //If dir ends with / append Index.html	
++	    if(mdbflag == 0) {
++		if((dir[strlen(dir)-1]) == '/' && (strchr(isfile, '.') == NULL)) {
++		    sprintf(dir, "%s%s", dir, "index.html");
++		} else {		
++		    if((dir[strlen(dir)-1]) != '/' && (strchr(isfile, '.') == NULL)) {
++			sprintf(dir, "%s%s", dir, "/index.html");
++		    }	    
++		}
++	    }
++
++/*	    //MDB-lookup
+ 	    //dir beginds with /
+ 	    if(dir[0] != '/') {
+ 		error_code = 400;
+ 		sprintf(error_msg, "400 Bad Request");
+-	    }
++	    }*/
+ 
+-	    //change this to work
++
++/*	    //CHECKING FOR MDB-LOOKUP IN URL
+ 	    if(strcmp(dir, "/mdb-lookup") == 0) { 		
+ 		error_code = 200;
+-		mdbflag = 1;
+-		
++		mdbflag = 1;		
+ 	    }
+ 
+-//to be changed	    //Create dir path
+-	    dir = strcat(web_root, dir);
+-	    printf("File dir: %s\n", dir);
++	    if(strcmp(dir, "/mdb-lookup?key=") == 0) {
++		error_code = 200;
++		mdbflag = 2;
++	    }*/
+ 
+-//to be changed	    //Check if dir exists
+-	    if((fp = fopen(dir, "rb+")) == NULL && mdbflag != 1) {
+-		error_code = 404;
+-		sprintf(error_msg, "404 Not Found");
++	    //CREATE A DIR PATH IF NOT MDB-LOOKUP
++	    if(mdbflag != 1) {
++	     	dir = strcat(web_root, dir);
++		printf("File dir: %s\n", dir);
++	       	if((fp = fopen(dir, "rb+")) == NULL) {
++		    error_code = 404;
++		    sprintf(error_msg, "404 Not Found");
++		}
+ 	    }
+ 
+ 	    //Construct Response Header
+ 	    char response_header[4096];
+ 
+-	    if(mdbflag != 1) {
+-	    if(error_code == 200) {
+-		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n", error_msg);
+-	    } else {
+-		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend); //Generic Error Code
+-	    }
++	    if(mdbflag == 0) {
++	       	if(error_code == 200) {
++		    sprintf(response_header, "HTTP/1.0 %s\r\n\r\n", error_msg);
++	       	} else {
++	    	    sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend); //Generic Error Code
++	       	}
++		printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
++		printf("ERROR CODE: %d\n", error_code);
++		send(clntsock, response_header, strlen(response_header), 0);
+ 	    }
+ 
+ 	    if(mdbflag == 1) {
+@@ -231,16 +275,18 @@ int main(int argc, char **argv)
+ 		send(clntsock, response_header, strlen(response_header), 0);
+ 	    }
+ 
+-	    
++	    if(mdbflag == 2) {
++		dir = strchr(dir, '=');
+ 
+-	    //Send Response Header
++	    }
++/*	    //Send Response Header
+     	    printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
+ 	    printf("ERROR CODE: %d\n", error_code);
+-	    send(clntsock, response_header, strlen(response_header), 0);
++	    send(clntsock, response_header, strlen(response_header), 0);*/
+ 
+ //to be changed	    //READ AND SEND FILE
+ 	    size_t nread;
+-	    if(error_code == 200) {
++	    if(error_code == 200 && mdbflag == 0) {
+ 	        while((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
+ 		    send(clntsock, buf, nread, 0);
+ 		}
+-- 
+2.17.1
+
+
+From ee465273d59ec9ddc51e736eefe6ddbfa17f8b6b Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Sat, 20 Apr 2019 00:43:17 -0400
+Subject: [PATCH 10/14] Fixed hanging issues by closing clntsock in parent,
+ formatted output, pretty much done other than fixing/cleaning a few things
+
+---
+ http-server.c | 82 +++++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 69 insertions(+), 13 deletions(-)
+
+diff --git a/http-server.c b/http-server.c
+index c8b1626..4b989e9 100644
+--- a/http-server.c
++++ b/http-server.c
+@@ -88,7 +88,7 @@ int main(int argc, char **argv)
+     if (bind(servsock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)
+         die("bind failed");
+ 
+- /*   //Testing MDB here 
++ /*  //Testing MDB here 
+     char nam[] = "nam\n"; 
+     send(mdbsock, &nam, strlen(nam)+1, 0);
+     char buftest[4096];
+@@ -101,7 +101,7 @@ int main(int argc, char **argv)
+ 	}
+     }*/
+ 
+-    FILE *mdbinput = fdopen(mdbsock, "r+b");
++    // FILE *mdbinput = fdopen(mdbsock, "r+b");
+ 
+     // Start listening for incoming connections
+     if (listen(servsock, 5 /* queue size for connection requests */ ) < 0)
+@@ -114,7 +114,7 @@ int main(int argc, char **argv)
+     //PID
+     pid_t pid;
+ 
+- /*   //HTML Formatting
++ /* //HTML Formatting
+     char bodystart[] = "<html><body><h1>";
+     char bodyend[] = "</h1></body></html>";
+ 
+@@ -135,9 +135,15 @@ int main(int argc, char **argv)
+             die("accept failed");
+ 	}
+ 
++	printf( "================================================================\n");
++
+ 	//FORK CHILD PROCESS LOOP
+ 	pid = fork();
+ 
++	if(pid != 0) {
++	    close(clntsock);
++	}
++
+ 	if(pid == 0) { // were in the child, do the code here ***
+ 	    char firstline[1000];
+ 	    char *dir;
+@@ -168,7 +174,7 @@ int main(int argc, char **argv)
+ 	    }*/
+ 
+ 	    //Begins with GET
+-	    if(strncmp(firstline, "GET /", 4) == 0 ) {
++	    if(strncmp(firstline, "GET ", 4) == 0 ) {
+ 		if(firstline[4] == '/') {
+     		    dir=strchr(firstline, '/');
+     		    for(int i = 0; i < strlen(dir); i++) {
+@@ -188,7 +194,7 @@ int main(int argc, char **argv)
+ 	    printf("DIRECTORY[%s]\n", dir);
+ 
+ 	    //TO CHECK IF FILE
+-	    isfile = strrchr(dir, '/');	 
++	    isfile = strrchr(dir, '/');
+ 	    printf("Is File dir: %s\n", isfile);   
+ 
+ 	    //Contains /../
+@@ -209,7 +215,7 @@ int main(int argc, char **argv)
+ 		mdbflag = 1;		
+ 	    }
+ 
+-	    if(strstr(dir, "/mdb-lookup?key=") != 0) {
++	    if(strncmp(dir, "/mdb-lookup?key=", 16) == 0) {
+ 		error_code = 200;
+ 		mdbflag = 2;
+ 	    }
+@@ -218,6 +224,7 @@ int main(int argc, char **argv)
+ 
+             //If dir ends with / append Index.html	
+ 	    if(mdbflag == 0) {
++		// use stat() function instead
+ 		if((dir[strlen(dir)-1]) == '/' && (strchr(isfile, '.') == NULL)) {
+ 		    sprintf(dir, "%s%s", dir, "index.html");
+ 		} else {		
+@@ -232,10 +239,10 @@ int main(int argc, char **argv)
+ 	    if(dir[0] != '/') {
+ 		error_code = 400;
+ 		sprintf(error_msg, "400 Bad Request");
+-	    }*/
++	    }
+ 
+ 
+-/*	    //CHECKING FOR MDB-LOOKUP IN URL
++	    //CHECKING FOR MDB-LOOKUP IN URL
+ 	    if(strcmp(dir, "/mdb-lookup") == 0) { 		
+ 		error_code = 200;
+ 		mdbflag = 1;		
+@@ -247,7 +254,7 @@ int main(int argc, char **argv)
+ 	    }*/
+ 
+ 	    //CREATE A DIR PATH IF NOT MDB-LOOKUP
+-	    if(mdbflag != 1) {
++	    if(mdbflag == 0) {
+ 	     	dir = strcat(web_root, dir);
+ 		printf("File dir: %s\n", dir);
+ 	       	if((fp = fopen(dir, "rb+")) == NULL) {
+@@ -271,27 +278,76 @@ int main(int argc, char **argv)
+ 	    }
+ 
+ 	    if(mdbflag == 1) {
+-		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s", error_msg, form);
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n<html><body>%s</body></html>", error_msg, form);
++		printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
+ 		send(clntsock, response_header, strlen(response_header), 0);
+ 	    }
+ 
+ 	    if(mdbflag == 2) {
+-		dir = strchr(dir, '=');
++		printf( "HERE!!!\n" );
++
++		char bufmdb[4096];
++	//	char nam[] = "nam\n";
++		FILE *mdbinput = fdopen(mdbsock, "r+b");
++		mdbkey = strchr(dir, '=');
++		mdbkey++; 
++	//	int mdblen = strlen(mdbkey);
++	//	mdbkey[mdblen + 1] = '\n';		
++		strcat(mdbkey, "\n");
++		printf("MDBKEY: [%s]\n", mdbkey);
++	/*	size_t len = strlen(mdbkey);
++		mdbkey[len + 1] = '\n';*/
++		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n<html><body>%s", error_msg, form);
++		printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
++		send(clntsock, response_header, strlen(response_header), 0);
+ 
++		sprintf(response_header, "<table border>\n");
++		send(clntsock, response_header, strlen(response_header), 0);
++		
++
++		send(mdbsock, mdbkey, strlen(mdbkey), 0);
++		int counter = 0;
++		printf("Sent key here \n");
++		while(1) {
++		    char mdbresults[4096];
++		    fgets(bufmdb, sizeof(bufmdb), mdbinput);
++		    printf("recvd(%d) = [%s]\n", (int)strlen(bufmdb), bufmdb);
++		    if( bufmdb[0] == '\n' || (bufmdb[0] == '\r' && bufmdb[1] == '\n') ) {
++			break;
++		    }
++		
++		    if( counter%2 == 0 ) {
++                    	sprintf(mdbresults, "<tr> <td> %s", bufmdb);
++		    } else {
++			sprintf(mdbresults, "<tr> <td bgcolor=yellow> %s", bufmdb);
++		    }
++
++		    printf("[%s]\n", mdbresults);
++		    send(clntsock, mdbresults, strlen(mdbresults), 0);
++		    counter++;
++		}
++		sprintf( response_header, "</table>\n</body></html>\n" );
++		send( clntsock, response_header, strlen(response_header), 0 );
+ 	    }
++
++	    printf("MDBKEY: %s\n", mdbkey);
++
+ /*	    //Send Response Header
+     	    printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
+ 	    printf("ERROR CODE: %d\n", error_code);
+ 	    send(clntsock, response_header, strlen(response_header), 0);*/
+ 
+-//to be changed	    //READ AND SEND FILE
++            //READ AND SEND FILE
++	    if(mdbflag == 0) {
+ 	    size_t nread;
+ 	    if(error_code == 200 && mdbflag == 0) {
+ 	        while((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
+ 		    send(clntsock, buf, nread, 0);
+ 		}
+ 	    }
+-
++	    }
++		
++	    printf( "----------------------------------------------------\n" );
+ 	    //Close Socket and Exit
+ 	    close(clntsock);
+ 	    die("Successfully sent");
+-- 
+2.17.1
+
+
+From 0ccc323a668e773c3be3709bd021b2b1e22f7960 Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Sun, 21 Apr 2019 21:08:21 -0400
+Subject: [PATCH 11/14] Fixed some error checks, cleaned up code, should be
+ ready for submission
+
+---
+ http-server.c | 162 +++++++++++++-------------------------------------
+ 1 file changed, 40 insertions(+), 122 deletions(-)
+
+diff --git a/http-server.c b/http-server.c
+index 4b989e9..6693801 100644
+--- a/http-server.c
++++ b/http-server.c
+@@ -15,7 +15,6 @@
+ #include <netdb.h>
+ #include <netinet/in.h>
+ 
+-
+ static void die(const char *s) {
+     perror(s);
+     exit(1);
+@@ -64,7 +63,7 @@ int main(int argc, char **argv)
+     struct sockaddr_in mdbservaddr;
+     memset(&mdbservaddr, 0, sizeof(mdbservaddr)); // must zero out the structure
+     mdbservaddr.sin_family = AF_INET;
+-    mdbservaddr.sin_addr.s_addr = inet_addr(mdbIP); //CHANGED from ip to serverIp ***
++    mdbservaddr.sin_addr.s_addr = inet_addr(mdbIP);
+     mdbservaddr.sin_port = htons(mdbport); // must be in network byte order
+ 
+     //CONNECT TO MDB SERVER
+@@ -88,21 +87,6 @@ int main(int argc, char **argv)
+     if (bind(servsock, (struct sockaddr *) &servaddr, sizeof(servaddr)) < 0)
+         die("bind failed");
+ 
+- /*  //Testing MDB here 
+-    char nam[] = "nam\n"; 
+-    send(mdbsock, &nam, strlen(nam)+1, 0);
+-    char buftest[4096];
+-    FILE *mdbtest = fdopen( mdbsock, "r+b" );
+-    while(1) {
+-	fgets( buftest, sizeof(buftest), mdbtest );
+-	printf( "recved= [%s]\n", buftest );
+-	if( buftest[0] == '\n' ) {
+-	    break;
+-	}
+-    }*/
+-
+-    // FILE *mdbinput = fdopen(mdbsock, "r+b");
+-
+     // Start listening for incoming connections
+     if (listen(servsock, 5 /* queue size for connection requests */ ) < 0)
+         die("listen failed");
+@@ -114,29 +98,12 @@ int main(int argc, char **argv)
+     //PID
+     pid_t pid;
+ 
+- /* //HTML Formatting
+-    char bodystart[] = "<html><body><h1>";
+-    char bodyend[] = "</h1></body></html>";
+-
+-    //MDB Formatting
+-    const char *form =
+-	"<h1>mdb-lookup</h1>\n"
+-	"<p>\n"
+-	"<form method=GET action=/mdb-lookup>\n"
+-	"lookup: <input type=text name=key>\n"
+-	"<input type=submit>\n"
+-	"</form>\n"
+-	"<p>\n";
+-*/
+-
+     while (1) {
+         clntlen = sizeof(clntaddr); // initialize the in-out parameter
+         if ((clntsock = accept(servsock, (struct sockaddr *) &clntaddr, &clntlen)) < 0) {
+             die("accept failed");
+ 	}
+ 
+-	printf( "================================================================\n");
+-
+ 	//FORK CHILD PROCESS LOOP
+ 	pid = fork();
+ 
+@@ -144,12 +111,12 @@ int main(int argc, char **argv)
+ 	    close(clntsock);
+ 	}
+ 
+-	if(pid == 0) { // were in the child, do the code here ***
++	if(pid == 0) { // CHILD PROCESS
+ 	    char firstline[1000];
+-	    char *dir;
+ 	    FILE *clntInput;
+ 	    FILE *fp;
+ 	    char buf[4096];
++	    char dir[256];
+ 	    int error_code = 200;
+ 	    int mdbflag = 0;
+ 	    char error_msg[128];
+@@ -162,21 +129,17 @@ int main(int argc, char **argv)
+ 
+ 	    // Parse Header Request
+ 	    fgets(firstline, sizeof(firstline) - 1, clntInput);
+-
+-/*	    if(strncmp(firstline, "GET /", 4) != 0) {
+-		error_code = 400;
+-		sprintf(error_msg, "400 Bad Request");
++	    for(int i=0; i < strlen(firstline); i++){
++		if(firstline[i] == '\r' || firstline[i] == '\n') {
++		    firstline[i] = '\0';
++		}
+ 	    }
+-  
+-            if(strncmp(firstline, "GET", 3) != 0) {
+-		error_code = 501;
+-		sprintf(error_msg, "501 Not Implemented");
+-	    }*/
+ 
+ 	    //Begins with GET
+-	    if(strncmp(firstline, "GET ", 4) == 0 ) {
++	    if(strncmp(firstline, "GET ", 4) == 0) {
+ 		if(firstline[4] == '/') {
+-    		    dir=strchr(firstline, '/');
++    		    char *pos = strchr(firstline, '/');
++		    strcpy(dir, pos);
+     		    for(int i = 0; i < strlen(dir); i++) {
+     			if((dir[i] == ' ') || dir[i] == '\r') {
+ 			    dir[i] = '\0';
+@@ -190,12 +153,9 @@ int main(int argc, char **argv)
+ 		error_code = 501;
+ 		sprintf(error_msg, "501 Not Implemented");
+ 	    }
+-            
+-	    printf("DIRECTORY[%s]\n", dir);
+-
++          
+ 	    //TO CHECK IF FILE
+ 	    isfile = strrchr(dir, '/');
+-	    printf("Is File dir: %s\n", isfile);   
+ 
+ 	    //Contains /../
+ 	    if((strstr(dir, "/../") != NULL)) {
+@@ -209,7 +169,7 @@ int main(int argc, char **argv)
+ 		sprintf(error_msg, "403 Forbidden");
+ 	    }
+ 
+-	   	    //CHECKING FOR MDB-LOOKUP IN URL
++	    //CHECKING FOR MDB-LOOKUP IN URL
+ 	    if(strcmp(dir, "/mdb-lookup") == 0) { 		
+ 		error_code = 200;
+ 		mdbflag = 1;		
+@@ -220,11 +180,8 @@ int main(int argc, char **argv)
+ 		mdbflag = 2;
+ 	    }
+ 
+-	    printf("MDB FLAG: %d\n", mdbflag);
+-
+             //If dir ends with / append Index.html	
+ 	    if(mdbflag == 0) {
+-		// use stat() function instead
+ 		if((dir[strlen(dir)-1]) == '/' && (strchr(isfile, '.') == NULL)) {
+ 		    sprintf(dir, "%s%s", dir, "index.html");
+ 		} else {		
+@@ -234,30 +191,11 @@ int main(int argc, char **argv)
+ 		}
+ 	    }
+ 
+-/*	    //MDB-lookup
+-	    //dir beginds with /
+-	    if(dir[0] != '/') {
+-		error_code = 400;
+-		sprintf(error_msg, "400 Bad Request");
+-	    }
+-
+-
+-	    //CHECKING FOR MDB-LOOKUP IN URL
+-	    if(strcmp(dir, "/mdb-lookup") == 0) { 		
+-		error_code = 200;
+-		mdbflag = 1;		
+-	    }
+-
+-	    if(strcmp(dir, "/mdb-lookup?key=") == 0) {
+-		error_code = 200;
+-		mdbflag = 2;
+-	    }*/
+-
+ 	    //CREATE A DIR PATH IF NOT MDB-LOOKUP
+ 	    if(mdbflag == 0) {
+-	     	dir = strcat(web_root, dir);
+-		printf("File dir: %s\n", dir);
+-	       	if((fp = fopen(dir, "rb+")) == NULL) {
++		char path[512];
++		sprintf(path, "%s%s", web_root, dir);
++	       	if((fp = fopen(path, "rb+")) == NULL) {
+ 		    error_code = 404;
+ 		    sprintf(error_msg, "404 Not Found");
+ 		}
+@@ -270,10 +208,9 @@ int main(int argc, char **argv)
+ 	       	if(error_code == 200) {
+ 		    sprintf(response_header, "HTTP/1.0 %s\r\n\r\n", error_msg);
+ 	       	} else {
+-	    	    sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend); //Generic Error Code
++	    	    sprintf(response_header, "HTTP/1.0 %s\r\n\r\n%s %s %s", error_msg, bodystart, error_msg, bodyend);
+ 	       	}
+ 		printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
+-		printf("ERROR CODE: %d\n", error_code);
+ 		send(clntsock, response_header, strlen(response_header), 0);
+ 	    }
+ 
+@@ -284,73 +221,54 @@ int main(int argc, char **argv)
+ 	    }
+ 
+ 	    if(mdbflag == 2) {
+-		printf( "HERE!!!\n" );
+-
++		char mdbkeycopy[4096];
+ 		char bufmdb[4096];
+-	//	char nam[] = "nam\n";
+ 		FILE *mdbinput = fdopen(mdbsock, "r+b");
++    		int counter = 0;
++
+ 		mdbkey = strchr(dir, '=');
+-		mdbkey++; 
+-	//	int mdblen = strlen(mdbkey);
+-	//	mdbkey[mdblen + 1] = '\n';		
+-		strcat(mdbkey, "\n");
+-		printf("MDBKEY: [%s]\n", mdbkey);
+-	/*	size_t len = strlen(mdbkey);
+-		mdbkey[len + 1] = '\n';*/
++		mdbkey++;
++		strcpy(mdbkeycopy, mdbkey);
++		strcat(mdbkeycopy, "\n");
+ 		sprintf(response_header, "HTTP/1.0 %s\r\n\r\n<html><body>%s", error_msg, form);
+-		printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
++		printf("looking up [%s]: %s \"%s\" %s\n", mdbkey, clntip, firstline, error_msg);
+ 		send(clntsock, response_header, strlen(response_header), 0);
+-
+ 		sprintf(response_header, "<table border>\n");
+ 		send(clntsock, response_header, strlen(response_header), 0);
+-		
+-
+-		send(mdbsock, mdbkey, strlen(mdbkey), 0);
+-		int counter = 0;
+-		printf("Sent key here \n");
++		send(mdbsock, mdbkeycopy, strlen(mdbkeycopy), 0);
++	
+ 		while(1) {
+ 		    char mdbresults[4096];
+ 		    fgets(bufmdb, sizeof(bufmdb), mdbinput);
+-		    printf("recvd(%d) = [%s]\n", (int)strlen(bufmdb), bufmdb);
+-		    if( bufmdb[0] == '\n' || (bufmdb[0] == '\r' && bufmdb[1] == '\n') ) {
++		    if(bufmdb[0] == '\n' || (bufmdb[0] == '\r' && bufmdb[1] == '\n')) {
+ 			break;
+ 		    }
+ 		
+-		    if( counter%2 == 0 ) {
++		    if(counter%2 == 0) {
+                     	sprintf(mdbresults, "<tr> <td> %s", bufmdb);
+ 		    } else {
+ 			sprintf(mdbresults, "<tr> <td bgcolor=yellow> %s", bufmdb);
+ 		    }
+-
+-		    printf("[%s]\n", mdbresults);
+ 		    send(clntsock, mdbresults, strlen(mdbresults), 0);
+ 		    counter++;
+ 		}
+-		sprintf( response_header, "</table>\n</body></html>\n" );
+-		send( clntsock, response_header, strlen(response_header), 0 );
++		sprintf(response_header, "</table>\n</body></html>\n");
++		send(clntsock, response_header, strlen(response_header), 0);
+ 	    }
+-
+-	    printf("MDBKEY: %s\n", mdbkey);
+-
+-/*	    //Send Response Header
+-    	    printf("%s \"%s\" %s\n", clntip, firstline, error_msg);
+-	    printf("ERROR CODE: %d\n", error_code);
+-	    send(clntsock, response_header, strlen(response_header), 0);*/
+-
+-            //READ AND SEND FILE
++      
++      	    //READ AND SEND FILE
+ 	    if(mdbflag == 0) {
+-	    size_t nread;
+-	    if(error_code == 200 && mdbflag == 0) {
+-	        while((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
+-		    send(clntsock, buf, nread, 0);
+-		}
+-	    }
+-	    }
+-		
+-	    printf( "----------------------------------------------------\n" );
++    		size_t nread;
++    		if(error_code == 200 && mdbflag == 0) {
++    		    while((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
++    			send(clntsock, buf, nread, 0);
++    		    }
++    		}
++	    }			    
++
+ 	    //Close Socket and Exit
+ 	    close(clntsock);
+-	    die("Successfully sent");
++	    exit(1);
+ 	}
+     }
+ }
+-- 
+2.17.1
+
+
+From 433c6a1e886941b2cd0d611e390b15cb11d966fa Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Sun, 21 Apr 2019 21:08:35 -0400
+Subject: [PATCH 12/14] Final Makefile for lab7
+
+---
+ Makefile | 21 +++++++++++++++++++++
+ 1 file changed, 21 insertions(+)
+ create mode 100644 Makefile
+
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..1772b8b
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,21 @@
++#
++# Makefile for lab 7, part 2
++#
++
++CC = gcc
++
++CFLAGS = -g -Wall $(INCLUDES)
++
++http-server: http-server.o
++	$(CC) -o http-server http-server.o
++
++http-server.o: http-server.c
++
++.PHONY: clean
++clean:
++	rm -f *.o *~ a.out core http-server
++
++.PHONY: all
++all: clean default
++
++
+-- 
+2.17.1
+
+
+From aa8d43567aca57d81091fe9ec249dcbfd9f94d00 Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Sun, 21 Apr 2019 21:08:48 -0400
+Subject: [PATCH 13/14] Final Readme for lab7
+
+---
+ README.txt | 18 ++++++++----------
+ 1 file changed, 8 insertions(+), 10 deletions(-)
+
+diff --git a/README.txt b/README.txt
+index 66dfd3e..83fc887 100644
+--- a/README.txt
++++ b/README.txt
+@@ -1,11 +1,9 @@
+-This file should contain:
+-
+-  - your name
+-  - your UNI
+-  - lab assignment number
+-  - description for each part
++Name: Alex Yu
++Uni: ajy2116
++Lab: Lab 7
++Description: My program works exactly as the specified by the lab.
+   
+-The description should indicate whether your solution for the part is
+-working or not.  You may also want to include anything else you would
+-like to communicate to the grader such as extra functionalities you
+-implemented or how you tried to fix your non-working code.
++======
++
++Part 1:
++I have implemented my web page properly.
+-- 
+2.17.1
+
+
+From 3aef478c627ab6563e90b13dab77be19baf25fed Mon Sep 17 00:00:00 2001
+From: Alex Yu <ajy2116@columbia.edu>
+Date: Sun, 21 Apr 2019 21:52:01 -0400
+Subject: [PATCH 14/14] Fixed some error codes after testing with netcat
+
+---
+ http-server.c | 16 +++++++---------
+ 1 file changed, 7 insertions(+), 9 deletions(-)
+
+diff --git a/http-server.c b/http-server.c
+index 6693801..7a31ca0 100644
+--- a/http-server.c
++++ b/http-server.c
+@@ -181,18 +181,18 @@ int main(int argc, char **argv)
+ 	    }
+ 
+             //If dir ends with / append Index.html	
+-	    if(mdbflag == 0) {
++	    if(mdbflag == 0 && error_code == 200) {
+ 		if((dir[strlen(dir)-1]) == '/' && (strchr(isfile, '.') == NULL)) {
+-		    sprintf(dir, "%s%s", dir, "index.html");
++		    strcat(dir, "index.html");
+ 		} else {		
+ 		    if((dir[strlen(dir)-1]) != '/' && (strchr(isfile, '.') == NULL)) {
+-			sprintf(dir, "%s%s", dir, "/index.html");
++			strcat(dir, "/index.html");
+ 		    }	    
+ 		}
+ 	    }
+ 
+ 	    //CREATE A DIR PATH IF NOT MDB-LOOKUP
+-	    if(mdbflag == 0) {
++	    if(mdbflag == 0 && error_code == 200) {
+ 		char path[512];
+ 		sprintf(path, "%s%s", web_root, dir);
+ 	       	if((fp = fopen(path, "rb+")) == NULL) {
+@@ -257,12 +257,10 @@ int main(int argc, char **argv)
+ 	    }
+       
+       	    //READ AND SEND FILE
+-	    if(mdbflag == 0) {
++	    if(mdbflag == 0 && error_code == 200) {
+     		size_t nread;
+-    		if(error_code == 200 && mdbflag == 0) {
+-    		    while((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
+-    			send(clntsock, buf, nread, 0);
+-    		    }
++    		while((nread = fread(buf, 1, sizeof(buf), fp)) != 0) {
++    		    send(clntsock, buf, nread, 0);
+     		}
+ 	    }			    
+ 
+-- 
+2.17.1
+
